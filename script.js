@@ -1,5 +1,5 @@
 /**
- * script.js: 3x3x3ルービックキューブの完全な回転ロジック
+ * script.js: 3x3x3ルービックキューブの完全な回転ロジックとシャッフル機能
  */
 
 let scene, camera, renderer, controls;
@@ -41,11 +41,14 @@ function init() {
     
     // カメラ操作 (マウスで視点変更)
     controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true; // 滑らかな動き
+    controls.enableDamping = true; 
     controls.dampingFactor = 0.05;
 
     window.addEventListener('resize', onWindowResize);
     window.addEventListener('keydown', onKeyPress);
+    
+    // キューブを初期化後、シャッフルを開始 **(ここが変更点)**
+    scrambleCube(); 
     
     animate();
 }
@@ -73,11 +76,9 @@ function createCubeMaterials(x, y, z) {
 function createRubiksCube() {
     const step = CUBE_SIZE + SPACING;
     
-    // x, y, z座標を -1, 0, 1 のインデックスで表現
     for (let x = -1; x <= 1; x++) {
         for (let y = -1; y <= 1; y++) {
             for (let z = -1; z <= 1; z++) {
-                // 中心キューブ (0, 0, 0) は描画しない
                 if (x === 0 && y === 0 && z === 0) continue; 
                 
                 const geometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
@@ -85,12 +86,10 @@ function createRubiksCube() {
                 
                 const cube = new THREE.Mesh(geometry, materials);
                 
-                // 位置の設定
                 cube.position.x = x * step;
                 cube.position.y = y * step;
                 cube.position.z = z * step;
                 
-                // キューブの初期位置を保存 (回転の判定に使用)
                 cube.userData.position = new THREE.Vector3(x, y, z); 
                 cubeGroup.add(cube);
             }
@@ -99,17 +98,95 @@ function createRubiksCube() {
 }
 
 // ----------------------------------------------------
-// 回転処理ロジック
+// シャッフル（スクランブル）ロジック
 // ----------------------------------------------------
 
-// 回転中のフラグ
+/**
+ * 20手ランダムにキューブを回転させ、シャッフルする
+ */
+function scrambleCube() {
+    const moves = ['R', 'L', 'U', 'D', 'F', 'B'];
+    const count = 20; 
+    const interval = 50; // 50msごとに次の手を適用
+
+    let i = 0;
+    
+    // 回転アニメーションを一時的に無効化し、シャッフルを高速で行うためのタイマー処理
+    const scrambleInterval = setInterval(() => {
+        if (i >= count) {
+            clearInterval(scrambleInterval);
+            isRotating = false; // シャッフル完了
+            return;
+        }
+
+        const layer = moves[Math.floor(Math.random() * moves.length)];
+        const direction = Math.random() < 0.5 ? 1 : -1; 
+        
+        // アニメーションを伴わない即座の回転処理 (アニメーション完了を待たない)
+        rotateLayerSync(layer, direction);
+
+        i++;
+    }, interval);
+}
+
+// ----------------------------------------------------
+// 同期的な回転処理（シャッフル用）
+// ----------------------------------------------------
+// rotateLayerをベースに、アニメーション部分を省略し、即座に回転を適用する関数
+
+function rotateLayerSync(layer, direction) {
+    let axis, value, rotationAxis;
+
+    switch (layer) {
+        case 'R': axis = 'x'; value = 1; rotationAxis = new THREE.Vector3(1, 0, 0); break; 
+        case 'L': axis = 'x'; value = -1; rotationAxis = new THREE.Vector3(-1, 0, 0); break; 
+        case 'U': axis = 'y'; value = 1; rotationAxis = new THREE.Vector3(0, 1, 0); break; 
+        case 'D': axis = 'y'; value = -1; rotationAxis = new THREE.Vector3(0, -1, 0); break; 
+        case 'F': axis = 'z'; value = 1; rotationAxis = new THREE.Vector3(0, 0, 1); break; 
+        case 'B': axis = 'z'; value = -1; rotationAxis = new THREE.Vector3(0, 0, -1); break; 
+        default: return;
+    }
+
+    const cubesToRotate = cubeGroup.children.filter(cube => 
+        Math.round(cube.userData.position[axis]) === value
+    );
+    
+    const rotationGroup = new THREE.Group();
+    cubeGroup.add(rotationGroup);
+    cubesToRotate.forEach(cube => {
+        rotationGroup.attach(cube);
+    });
+
+    const angle = (Math.PI / 2) * direction; // 90度または-90度
+    
+    // *** アニメーションなしで即座に回転を適用 ***
+    rotationGroup.rotateOnWorldAxis(rotationAxis, angle);
+    rotationGroup.updateMatrixWorld(true);
+
+    // 回転後の位置と向きを更新
+    cubesToRotate.forEach(cube => {
+        cubeGroup.attach(cube);
+        
+        const newPos = cube.position.clone();
+        const step = CUBE_SIZE + SPACING;
+        
+        cube.userData.position = new THREE.Vector3(
+            Math.round(newPos.x / step),
+            Math.round(newPos.y / step),
+            Math.round(newPos.z / step)
+        );
+    });
+    
+    cubeGroup.remove(rotationGroup);
+}
+
+// ----------------------------------------------------
+// アニメーション付き回転処理（ユーザー操作用）
+// ----------------------------------------------------
+
 let isRotating = false;
 
-/**
- * 指定された軸とレイヤーに基づいてキューブ面を回転させる
- * @param {string} layer - 回転させる面 ('R', 'U', 'F'など)
- * @param {number} direction - 回転方向 (1: 正回転, -1: 逆回転)
- */
+// ユーザー操作による回転関数 (アニメーション付き)
 function rotateLayer(layer, direction) {
     if (isRotating) return;
     isRotating = true;
@@ -120,48 +197,44 @@ function rotateLayer(layer, direction) {
         case 'R': axis = 'x'; value = 1; rotationAxis = new THREE.Vector3(1, 0, 0); break; // Right (x=1)
         case 'L': axis = 'x'; value = -1; rotationAxis = new THREE.Vector3(-1, 0, 0); break; // Left (x=-1)
         case 'U': axis = 'y'; value = 1; rotationAxis = new THREE.Vector3(0, 1, 0); break; // Up (y=1)
-        case 'D': case 'd': axis = 'y'; value = -1; rotationAxis = new THREE.Vector3(0, -1, 0); break; // Down (y=-1)
+        case 'D': axis = 'y'; value = -1; rotationAxis = new THREE.Vector3(0, -1, 0); break; // Down (y=-1)
         case 'F': axis = 'z'; value = 1; rotationAxis = new THREE.Vector3(0, 0, 1); break; // Front (z=1)
         case 'B': axis = 'z'; value = -1; rotationAxis = new THREE.Vector3(0, 0, -1); break; // Back (z=-1)
         default: isRotating = false; return;
     }
 
-    // 回転させるキューブをフィルタリング
     const cubesToRotate = cubeGroup.children.filter(cube => 
-        // わずかな誤差を許容して判断
         Math.round(cube.userData.position[axis]) === value
     );
     
-    // 一時的な回転グループを作成し、キューブを移動
     const rotationGroup = new THREE.Group();
     cubeGroup.add(rotationGroup);
     cubesToRotate.forEach(cube => {
         rotationGroup.attach(cube);
     });
 
-    const angle = (Math.PI / 2) * direction; // 90度または-90度
-
-    // アニメーションのための変数を準備
-    const startAngle = 0;
-    const targetAngle = angle;
-    const duration = 250; // 250msで回転
+    const targetAngle = (Math.PI / 2) * direction; // 目標角度
+    const duration = 250; // アニメーション時間 (ms)
     const startTime = Date.now();
+    const startQuaternion = rotationGroup.quaternion.clone();
 
     function animateRotation() {
         const elapsed = Date.now() - startTime;
         const progress = Math.min(1, elapsed / duration);
-        const currentAngle = startAngle + (targetAngle * progress);
-
-        // 差分だけ回転させるため、前のフレームの回転角度を計算
-        const deltaAngle = currentAngle - rotationGroup.rotation.clone().unproject(rotationAxis)[axis];
         
-        rotationGroup.rotateOnWorldAxis(rotationAxis, deltaAngle);
+        // ターゲットクォータニオンの計算
+        const targetQuaternion = new THREE.Quaternion().setFromAxisAngle(rotationAxis, targetAngle).multiply(startQuaternion);
 
+        // 線形補間
+        rotationGroup.quaternion.slerp(targetQuaternion, progress);
+        
         if (progress < 1) {
             requestAnimationFrame(animateRotation);
         } else {
             // アニメーション完了後の処理
-            rotationGroup.rotation.set(0, 0, 0); // 回転グループの回転をリセット
+            
+            // 完全に目標角度に設定し直し、クォータニオンをクリア
+            rotationGroup.quaternion.setFromAxisAngle(rotationAxis, targetAngle).multiply(startQuaternion);
             rotationGroup.updateMatrixWorld(true);
 
             // キューブを元のグループに戻し、位置と向きを更新
@@ -177,15 +250,20 @@ function rotateLayer(layer, direction) {
                     Math.round(newPos.y / step),
                     Math.round(newPos.z / step)
                 );
+                
+                // 回転後のローカルな回転情報も更新（この処理が重要）
+                cube.rotation.setFromQuaternion(cube.quaternion);
             });
             
+            rotationGroup.quaternion.identity(); // rotationGroupの回転をリセット
             cubeGroup.remove(rotationGroup);
-            isRotating = false; // フラグ解除
+            isRotating = false; 
         }
     }
 
     animateRotation();
 }
+
 
 // キーボード入力処理
 function onKeyPress(event) {
@@ -193,20 +271,13 @@ function onKeyPress(event) {
     let direction = 1; // 1: 正回転 (時計回り), -1: 逆回転 (反時計回り)
     
     switch (event.key.toUpperCase()) {
-        case 'R': layer = 'R'; direction = 1; break; // Right (R)
-        case 'L': layer = 'L'; direction = -1; break; // Left (L')
-        case 'U': layer = 'U'; direction = 1; break; // Up (U)
-        case 'D': layer = 'D'; direction = -1; break; // Down (D')
-        case 'F': layer = 'F'; direction = 1; break; // Front (F)
-        case 'B': layer = 'B'; direction = -1; break; // Back (B')
-        
-        // シフトキーと同時押しで逆回転 (例: r' -> Shift + R)
-        case 'R': if (event.shiftKey) { layer = 'R'; direction = -1; } break; 
-        case 'L': if (event.shiftKey) { layer = 'L'; direction = 1; } break; 
-        case 'U': if (event.shiftKey) { layer = 'U'; direction = -1; } break; 
-        case 'D': if (event.shiftKey) { layer = 'D'; direction = 1; } break;
-        case 'F': if (event.shiftKey) { layer = 'F'; direction = -1; } break;
-        case 'B': if (event.shiftKey) { layer = 'B'; direction = 1; } break;
+        case 'R': layer = 'R'; direction = event.shiftKey ? -1 : 1; break; 
+        case 'L': layer = 'L'; direction = event.shiftKey ? 1 : -1; break; 
+        case 'U': layer = 'U'; direction = event.shiftKey ? -1 : 1; break; 
+        case 'D': layer = 'D'; direction = event.shiftKey ? 1 : -1; break; 
+        case 'F': layer = 'F'; direction = event.shiftKey ? -1 : 1; break; 
+        case 'B': layer = 'B'; direction = event.shiftKey ? 1 : -1; break; 
+        default: return;
     }
     
     if (layer) {
@@ -222,7 +293,7 @@ function animate() {
     requestAnimationFrame(animate);
     
     if (controls) {
-        controls.update(); // カメラ操作の更新
+        controls.update(); 
     }
     
     renderer.render(scene, camera);
